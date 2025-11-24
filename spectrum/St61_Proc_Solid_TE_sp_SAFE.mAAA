@@ -1,0 +1,311 @@
+%===============================================================================
+% Solid: Classification by T Energy
+%===============================================================================
+
+function [ResSolid]=St61_Proc_Solid_TE_sp_SAFE(CompStructA,FEMatricesA,ProcTE)
+    ii_l=ProcTE.ilayer;
+    cone=complex(0.,1.);
+    
+    %===============================================================================
+    % Build Polar Grid
+    %===============================================================================
+    % At first, we choose max r in r direction and find appropriate
+    % triangles. Then among these triangles we find the vertex of a
+    % triangle which is close to the origin and choose appropriate nodes for RR grid.
+    % Using this vertex as next start point we have cycle until RR(end)
+    % reaches min r in this layer.
+    rr=FEMatricesA.DomainRx(ii_l);
+    rr_min_prev_var=FEMatricesA.DomainRx(ii_l);
+    
+    if ii_l==1 % the smallest r of mesh
+        rr_min_mesh=min(sqrt(FEMatricesA.MeshNodes(1,:).^2+FEMatricesA.MeshNodes(2,:).^2));
+    else
+        rr_min_mesh=FEMatricesA.DomainRx(ii_l-1);
+    end
+    
+    % find solid triangles and their nodes
+    tri_solid_ind=(FEMatricesA.MeshTri(CompStructA.Advanced.N_nodes+1,:)==ii_l);
+    tri_solid=FEMatricesA.MeshTri(1:CompStructA.Advanced.N_nodes,tri_solid_ind);
+
+    % set initial node with r=r_max and z=0
+    r_find=FEMatricesA.DomainRx(ii_l); z_find=0.;
+    
+    i_count=0;
+    while (1>0)
+        i_count=i_count+1;
+        %if i_count>2, break; end
+        node_find=find(FEMatricesA.MeshNodes(1,:)==r_find); % & FEMatricesA.MeshNodes(2,:)==z_find);        
+        
+        num_tri_node_find=[];
+        for iel=1:size(tri_solid,2)
+            if sum((tri_solid(1:CompStructA.Advanced.N_nodes,iel)==node_find))==1
+               num_tri_node_find=[num_tri_node_find; iel];
+            end
+        end
+        
+        tri_nodes=tri_solid(1:CompStructA.Advanced.N_nodes,num_tri_node_find);
+        
+        rr_min_var=rr_min_prev_var; tri_node_min=1;
+        for iet=1:size(tri_nodes,2)
+            tri_node_xx=FEMatricesA.MeshNodes(1,tri_nodes(:,iet))';
+            tri_node_yy=FEMatricesA.MeshNodes(2,tri_nodes(:,iet))';
+            rr_var=sqrt(tri_node_xx(1:3).^2+tri_node_yy(1:3).^2);
+            for ia=1:3
+                if rr_var(ia)<rr_min_var; rr_min_var=rr_var(ia); tri_node_min=iet; end
+            end
+        end
+                
+        tri_node_xx=FEMatricesA.MeshNodes(1,tri_nodes(:,tri_node_min))';
+        tri_node_yy=FEMatricesA.MeshNodes(2,tri_nodes(:,tri_node_min))';
+        rr_var=sqrt(tri_node_xx.^2+tri_node_yy.^2);
+        if tri_nodes(1,tri_node_min)==node_find % 1 node
+           if rr_var(2)>rr_var(3)
+              ind_rr_1=9; ind_rr_2=8; ind_rr=3;
+           else
+              ind_rr_1=4; ind_rr_2=5; ind_rr=2;
+           end
+        end
+        if tri_nodes(2,tri_node_min)==node_find % 2 node
+           if rr_var(1)>rr_var(3)
+              ind_rr_1=6; ind_rr_2=7; ind_rr=3;
+           else
+              ind_rr_1=5; ind_rr_2=4; ind_rr=1;
+           end
+        end
+        if tri_nodes(3,tri_node_min)==node_find % 3 node
+           if rr_var(1)>rr_var(2)
+              ind_rr_1=7; ind_rr_2=6; ind_rr=2;
+           else
+              ind_rr_1=8; ind_rr_2=9; ind_rr=1;
+           end
+        end
+            
+        rr=[rr; rr_var(ind_rr_1); rr_var(ind_rr_2); rr_var(ind_rr)];
+        rr_min_prev_var=rr_var(ind_rr);
+
+        if rr_var(ind_rr)<=rr_min_mesh*1.01, break; end
+        
+        r_find=tri_node_xx(ind_rr); z_find=tri_node_yy(ind_rr);
+        tri_solid(:,num_tri_node_find)=[];
+    end
+    
+    % tuning of rr(1) and rr(end)
+    nodes_bound_ext=FEMatricesA.BNodesFull{ii_l};
+    [rr_bound_ext,~]=min(FEMatricesA.MeshNodes(1,nodes_bound_ext).^2+FEMatricesA.MeshNodes(2,nodes_bound_ext).^2);
+    rr(1)=sqrt(rr_bound_ext)*0.99;
+    
+    nodes_bound_int=FEMatricesA.BNodesFull{ii_l-1};
+    [rr_bound_int,~]=max(FEMatricesA.MeshNodes(1,nodes_bound_int).^2+FEMatricesA.MeshNodes(2,nodes_bound_int).^2);
+    rr(end)=sqrt(rr_bound_int)*1.01;
+
+    Nrr=length(rr);
+    % reverse rr grid
+    rr_var=zeros(Nrr,1);
+    for irr=1:Nrr, rr_var(irr)=rr(Nrr-(irr-1)); end
+    rr=rr_var;
+    ResSolid.rr=rr;
+    
+    %===============================================================================
+    rho_solid=FEMatricesA.PhysProp{ii_l}.rho*1000.;
+    DThetaV = pi/(CompStructA.Model.DomainNth(ii_l)*ProcTE.DThetaInc); 
+    ThetaV = (( - pi):DThetaV: pi )'; NThetaV=length(ThetaV);
+    % end of building of polar grid
+    %===============================================================================
+
+    %===============================================================================
+    % make memory for answer 
+    ResSolid.TE_fer=zeros(length(ProcTE.neigs),Nrr); % T Energy
+    % last index: 1 - for plus, 2 - for minus 
+    ResSolid.cF_ur_rm_pm=zeros(length(ProcTE.neigs),Nrr,ProcTE.NHarm,2);
+    ResSolid.cF_uf_rm_pm=zeros(length(ProcTE.neigs),Nrr,ProcTE.NHarm,2);
+    ResSolid.cF_uz_rm_pm=zeros(length(ProcTE.neigs),Nrr,ProcTE.NHarm,2);
+    
+    % Common parameters 
+    % Rectangular grid
+    xx=FEMatricesA.MeshNodes(1,FEMatricesA.DNodes{ii_l})';
+    yy=FEMatricesA.MeshNodes(2,FEMatricesA.DNodes{ii_l})';
+
+    % Plot polar grid for testing
+    if lower(ProcTE.Polar_Grid)=='y'
+        figure(ProcTE.num_fig+(ProcTE.ii_f-1)*10+ProcTE.ilayer); 
+        set(gca,'FontSize',ProcTE.font_size); 
+        hold on; box on;
+        plot(xx,yy,'LineStyle','o','Markersize',5,'Color','b');
+        for ir=1:Nrr
+            [qxx,qyy] = pol2cart(ThetaV,rr(ir));
+            plot(qxx,qyy,'Color','r','LineWidth',2);
+        end
+        xlabel('x (m)'); ylabel('y (m)'); title('Polar Grid in Solid');
+    end
+    
+    %===============================================================================
+    % work massive for Discrete Fourier transform
+    exp_var_p=zeros(NThetaV,ProcTE.NHarm);
+    for iHarm=1:ProcTE.NHarm, exp_var_p(:,iHarm)=exp( cone.*(iHarm-1).*ThetaV(:)); end
+    exp_var_m=conj(exp_var_p);
+    
+    %===============================================================================
+    %===============================================================================
+    % Main Caqlculations for given eigs
+    %===============================================================================
+    %===============================================================================
+    ifreq=ProcTE.ii_f;
+    ProcTE.freq=ProcTE.freq_count(ifreq);
+    
+    %===============================================================================
+    % Loading the results for the specific frequency number
+    %===============================================================================
+    curr_dir=pwd; cd('..');
+    dat_file = char(strcat(ProcTE.Dir_Name,'\Results-',num2str(ProcTE.freq_count(ifreq)),'.mat'));
+    load(dat_file);
+    cd(curr_dir);
+    
+    iii_eig=0;
+    for ieig=ProcTE.neigs
+        iii_eig=iii_eig+1;
+
+        %===============================================================================
+        % Read Data of Solid at all nodes
+        %===============================================================================
+
+        eivec_var=Results.REig_vecs(1:length(Results.REig_vecs)/2,ieig);
+
+        ivar_st=ProcTE.stfn_layers(ii_l,1);
+        ivar_fn=ProcTE.stfn_layers(ii_l,2);
+        eivec_D=eivec_var(ivar_st:ivar_fn);
+
+        %===============================================================================
+        % Calculate of ux, uy, uz, ur, uf, T Energy at all nodes
+        %===============================================================================
+        node=zeros(length(FEMatricesA.DNodes{ii_l}),1);
+        ux=zeros(length(FEMatricesA.DNodes{ii_l}),1);
+        uy=zeros(length(FEMatricesA.DNodes{ii_l}),1);
+        uz=zeros(length(FEMatricesA.DNodes{ii_l}),1);
+        ur=zeros(length(FEMatricesA.DNodes{ii_l}),1);
+        uf=zeros(length(FEMatricesA.DNodes{ii_l}),1);
+
+        % read ux, uy, uz displacements
+        jj_n=1;
+        for ii_n=1:num_nodes
+            ii_m=FEMatricesA.DNodes{ii_l}(ii_n);
+            node(ii_n)=ii_m;
+
+            if sum(ismember(FEMatricesA.BNodesFull{ii_l},ii_m))==0
+               ux(ii_n)=eivec_D(jj_n);
+               uy(ii_n)=eivec_D(jj_n+1);
+               uz(ii_n)=eivec_D(jj_n+2);
+
+               jj_n=jj_n+3;
+            end
+        end
+        
+        % calculate ur, uf displacements
+        for ii_n=1:length(FEMatricesA.DNodes{ii_l})
+            fi=atan(yy(ii_n)/abs(xx(ii_n)));
+            if (xx(ii_n)<0. && yy(ii_n)>0.), fi= pi-fi; end
+            if (xx(ii_n)<0. && yy(ii_n)<0.), fi=-pi-fi; end
+
+            %ur(ii_n)=sqrt(abs(ux(ii_n)).^2+abs(uy(ii_n)).^2);
+            ur(ii_n)= cos(fi)*ux(ii_n)+sin(fi)*uy(ii_n);
+
+            % uf displacement
+            uf(ii_n)=-sin(fi)*ux(ii_n)+cos(fi)*uy(ii_n);
+        end
+        
+        %===============================================================================
+        % ReCalculate of ur_fr, uf_rf, uz_rf in Polar Grid
+        %===============================================================================
+        
+        xx_rf=zeros(Nrr,NThetaV); yy_rf=zeros(Nrr,NThetaV);
+        ur_rf=zeros(Nrr,NThetaV); uf_rf=zeros(Nrr,NThetaV); uz_rf=zeros(Nrr,NThetaV);
+
+        Fr_re_var=TriScatteredInterp(xx,yy,real(ur)); % define interpolation function in rectanglar grid
+        Fr_im_var=TriScatteredInterp(xx,yy,imag(ur)); % define interpolation function in rectanglar grid
+
+        Ff_re_var=TriScatteredInterp(xx,yy,real(uf)); % define interpolation function in rectanglar grid
+        Ff_im_var=TriScatteredInterp(xx,yy,imag(uf)); % define interpolation function in rectanglar grid
+
+        Fz_re_var=TriScatteredInterp(xx,yy,real(uz)); % define interpolation function in rectanglar grid
+        Fz_im_var=TriScatteredInterp(xx,yy,imag(uz)); % define interpolation function in rectanglar grid
+
+        for ir=1:Nrr
+            rr_ir=ones(length(ThetaV),1).*rr(ir)';
+            [qxx,qyy] = pol2cart(ThetaV,rr_ir);
+            xx_rf(ir,:)=qxx; yy_rf(ir,:)=qyy;
+
+            qzz_re=Fr_re_var(qxx,qyy); qzz_im=Fr_im_var(qxx,qyy); 
+            ur_rf(ir,:)=complex(qzz_re,qzz_im);
+            qzz_re=Ff_re_var(qxx,qyy); qzz_im=Ff_im_var(qxx,qyy); 
+            uf_rf(ir,:)=complex(qzz_re,qzz_im);
+            qzz_re=Fz_re_var(qxx,qyy); qzz_im=Fz_im_var(qxx,qyy); 
+            uz_rf(ir,:)=complex(qzz_re,qzz_im);
+        end
+              
+        %% Compare ur in Cartesian and Polar coordinates
+        %figure(ProcTE.num_fig+601); 
+        %set(gca,'FontSize',ProcTE.font_size); hold on; box on; view(45,45);
+        %xlim([min(xx) max(xx)]); ylim([min(yy) max(yy)]);
+        %tri=delaunay(xx,yy);
+        %trimesh(tri,xx,yy,real(ur));
+        %xlabel('x (m)'); ylabel('y (m)');
+        %title_show='Solid, Surface of T Energy';
+        %title(title_show);
+        %% 
+        %figure(ProcTE.num_fig+602); 
+        %set(gca,'FontSize',ProcTE.font_size); hold on; box on;
+        %%for ir=1:Nrr
+        %%    view(45,45); plot3(xx_rf(ir,:),yy_rf(ir,:),real(ur_rf(ir,:)),'r'); 
+        %%end
+        %plot(ThetaV,real(ur_rf(2,:)),'r'); 
+        %plot(ThetaV,imag(ur_rf(2,:)),'b'); 
+        
+        %===============================================================================
+        % Calculate T Energy 
+        %===============================================================================
+        varC=0.5*rho_solid*(2.*pi*ProcTE.freq.*CompStructA.Misc.F_conv).^2;
+        var_df=DThetaV/2.;
+        for ir=1:Nrr
+            var_te =  abs(ur_rf(ir,(1:NThetaV-1))).^2 ...
+                    + abs(uf_rf(ir,(1:NThetaV-1))).^2 ...
+                    + abs(uz_rf(ir,(1:NThetaV-1))).^2;
+                        
+            ResSolid.TE_fer(iii_eig,ir)=varC.*sum(var_te).*var_df;
+        end
+
+        %===============================================================================
+        % Fourier decomposition of ur_rf, uf_rf, uz_rf by angle fi for fixed r
+        %===============================================================================
+        % make memory for temporary answer  
+        var_ur_pm=zeros(Nrr,ProcTE.NHarm,2); 
+        var_uf_pm=zeros(Nrr,ProcTE.NHarm,2); 
+        var_uz_pm=zeros(Nrr,ProcTE.NHarm,2); 
+
+        % I_i ~ 0.5*(f(x_{i-1})+f(x_i))*(x_i-x_{i-1})
+        % Int f(x)=((f_0+f_n)/2+sum_{i=1}^{n-1)f_i)*dx, dx=(b-a)/n
+        % we have that f_0=f_n !
+        
+        for iHarm=1:ProcTE.NHarm
+        for ir=1:Nrr
+            var_ur_pm(ir,iHarm,1)=sum((ur_rf(ir,(1:NThetaV-1)).').*exp_var_p((1:NThetaV-1),iHarm)).*var_df;
+            var_uf_pm(ir,iHarm,1)=sum((uf_rf(ir,(1:NThetaV-1)).').*exp_var_p((1:NThetaV-1),iHarm)).*var_df;
+            var_uz_pm(ir,iHarm,1)=sum((uz_rf(ir,(1:NThetaV-1)).').*exp_var_p((1:NThetaV-1),iHarm)).*var_df;
+
+            var_ur_pm(ir,iHarm,2)=sum((ur_rf(ir,(1:NThetaV-1)).').*exp_var_m((1:NThetaV-1),iHarm)).*var_df;
+            var_uf_pm(ir,iHarm,2)=sum((uf_rf(ir,(1:NThetaV-1)).').*exp_var_m((1:NThetaV-1),iHarm)).*var_df;
+            var_uz_pm(ir,iHarm,2)=sum((uz_rf(ir,(1:NThetaV-1)).').*exp_var_m((1:NThetaV-1),iHarm)).*var_df;
+        end
+        end
+        
+        var_pm=var_ur_pm;
+        ResSolid.cF_ur_rm_pm(iii_eig,:,:,:)=var_pm./(2.*pi);
+        
+        var_pm=var_uf_pm;
+        ResSolid.cF_uf_rm_pm(iii_eig,:,:,:)=var_pm./(2.*pi);
+        
+        var_pm=var_uz_pm;
+        ResSolid.cF_uz_rm_pm(iii_eig,:,:,:)=var_pm./(2.*pi);
+        
+    end % cycle of eigs
+    
+end % program
+

@@ -1,0 +1,37 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Read and Calc phase velocities and slownesses for all eigs.
+% k(w)=w/v(w)*(1+i/2Q(w)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+function [Result_Velocity,Result_Slowness,Result_Attenuation] = ...
+          St51_Calc_VS_sp_SAFE(CompStructA,FEMatricesA,PlotAniso)
+
+    Result_Freq=zeros(CompStructA.Model.N_disp,1);
+    Result_Slowness=zeros(CompStructA.Model.N_disp,CompStructA.Advanced.num_eig_max);
+    Result_Velocity=zeros(CompStructA.Model.N_disp,CompStructA.Advanced.num_eig_max);
+    Result_Attenuation=zeros(CompStructA.Model.N_disp,CompStructA.Advanced.num_eig_max);
+
+    % Give velocities in m/s
+    slow_coef=1.;
+    if strcmp(CompStructA.Config.SloUnits,'us/ft'), slow_coef=CompStructA.Misc.S_conv/1000.; end % 0.0254*12
+    
+    %prev_folder=cd(char(PlotAniso.dir_input));
+    for ii_f = 1:CompStructA.Model.N_disp
+        %===============================================================================
+        % Loading the results for the specific point of eigenvalue variable
+        %===============================================================================
+
+        dat_file = strcat(char(PlotAniso.Full_Dir_Name),'\Results-',num2str(CompStructA.Model.f_array(ii_f)),'.mat');
+        load(dat_file);
+
+        var_mas=diag(Results.REig_vals);
+        Result_Freq(ii_f)=Results.omega_val/(2.*pi);
+        Result_Velocity(ii_f,1:CompStructA.Advanced.num_eig_max)= ...
+            CompStructA.Misc.F_conv.*Results.omega_val./real(var_mas(1:CompStructA.Advanced.num_eig_max));
+        Result_Slowness(ii_f,1:CompStructA.Advanced.num_eig_max)= ...
+            slow_coef.*10.^6./Result_Velocity(ii_f,1:CompStructA.Advanced.num_eig_max);
+        Result_Attenuation(ii_f,1:CompStructA.Advanced.num_eig_max)= ...
+            2.*imag(var_mas(1:CompStructA.Advanced.num_eig_max))./real(var_mas(1:CompStructA.Advanced.num_eig_max));
+    end
+    
+    %cd(prev_folder);    
+end
